@@ -9,7 +9,7 @@
 				"onInactiveMarkAs": "Succeeded",
 				"dependsOn": [
 					{
-						"activity": "Append variable",
+						"activity": "Append variable1",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -28,11 +28,11 @@
 				}
 			},
 			{
-				"name": "ForEachEntities",
+				"name": "ForEach Entities",
 				"type": "ForEach",
 				"dependsOn": [
 					{
-						"activity": "Get MetadataLanding",
+						"activity": "Get Metadata Landing",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -41,13 +41,13 @@
 				"userProperties": [],
 				"typeProperties": {
 					"items": {
-						"value": "@activity('Get MetadataLanding').output.childItems",
+						"value": "@activity('Get Metadata Landing').output.childItems",
 						"type": "Expression"
 					},
 					"isSequential": true,
 					"activities": [
 						{
-							"name": "Get MetadataEntities",
+							"name": "Get Metadata Entities",
 							"type": "GetMetadata",
 							"dependsOn": [],
 							"policy": {
@@ -59,8 +59,19 @@
 							},
 							"userProperties": [],
 							"typeProperties": {
+								"dataset": {
+									"referenceName": "ds_adlsGen2",
+									"type": "DatasetReference",
+									"parameters": {
+										"folder": {
+											"value": "@item().name",
+											"type": "Expression"
+										}
+									}
+								},
 								"fieldList": [
-									"childItems"
+									"childItems",
+									"itemName"
 								],
 								"storeSettings": {
 									"type": "AzureBlobFSReadSettings",
@@ -73,34 +84,79 @@
 							}
 						},
 						{
-							"name": "Set variable1",
-							"type": "SetVariable",
+							"name": "If Condition1",
+							"type": "IfCondition",
 							"dependsOn": [
 								{
-									"activity": "Get MetadataEntities",
+									"activity": "Get Metadata Entities",
 									"dependencyConditions": [
 										"Succeeded"
 									]
 								}
 							],
-							"policy": {
-								"secureOutput": false,
-								"secureInput": false
-							},
 							"userProperties": [],
 							"typeProperties": {
-								"variableName": "var",
-								"value": {
-									"value": "@item().name",
+								"expression": {
+									"value": "@greater(length(activity('Get Metadata Entities').output.childItems), 1)\n",
 									"type": "Expression"
-								}
+								},
+								"ifFalseActivities": [
+									{
+										"name": "Append variable",
+										"type": "AppendVariable",
+										"dependsOn": [],
+										"userProperties": [],
+										"typeProperties": {
+											"variableName": "appendVar",
+											"value": {
+												"value": "@{item().name}/@{activity('Get Metadata Entities').output.childItems[0].name}",
+												"type": "Expression"
+											}
+										}
+									}
+								],
+								"ifTrueActivities": [
+									{
+										"name": "Append variable_copy2",
+										"type": "AppendVariable",
+										"dependsOn": [],
+										"userProperties": [],
+										"typeProperties": {
+											"variableName": "appendVar",
+											"value": {
+												"value": "@{item().name}/@{activity('Get Metadata Entities').output.childItems[0].name}",
+												"type": "Expression"
+											}
+										}
+									},
+									{
+										"name": "Append variable_copy3",
+										"type": "AppendVariable",
+										"dependsOn": [
+											{
+												"activity": "Append variable_copy2",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"userProperties": [],
+										"typeProperties": {
+											"variableName": "appendVar",
+											"value": {
+												"value": "@{item().name}/@{activity('Get Metadata Entities').output.childItems[1].name}",
+												"type": "Expression"
+											}
+										}
+									}
+								]
 							}
 						}
 					]
 				}
 			},
 			{
-				"name": "Get MetadataLanding",
+				"name": "Get Metadata Landing",
 				"type": "GetMetadata",
 				"dependsOn": [],
 				"policy": {
@@ -112,6 +168,10 @@
 				},
 				"userProperties": [],
 				"typeProperties": {
+					"dataset": {
+						"referenceName": "ds_adls",
+						"type": "DatasetReference"
+					},
 					"fieldList": [
 						"childItems"
 					],
@@ -126,7 +186,7 @@
 				}
 			},
 			{
-				"name": "Append variable",
+				"name": "Append variable1",
 				"type": "AppendVariable",
 				"state": "Inactive",
 				"onInactiveMarkAs": "Succeeded",
@@ -148,28 +208,28 @@
 				}
 			},
 			{
-				"name": "ForEachYear",
+				"name": "ForEach Year1",
 				"type": "ForEach",
 				"state": "Inactive",
 				"onInactiveMarkAs": "Succeeded",
 				"dependsOn": [
 					{
-						"activity": "ForEachEntities",
+						"activity": "ForEach Entities",
 						"dependencyConditions": [
-							"Succeeded"
+							"Failed"
 						]
 					}
 				],
 				"userProperties": [],
 				"typeProperties": {
 					"items": {
-						"value": "@activity('Get MetadataEntities').output.childItems",
+						"value": "@activity('Get Metadata Entities').output.childItems",
 						"type": "Expression"
 					},
 					"isSequential": true,
 					"activities": [
 						{
-							"name": "Get MetadataYear",
+							"name": "Get Metadata Year1",
 							"type": "GetMetadata",
 							"state": "Inactive",
 							"onInactiveMarkAs": "Succeeded",
@@ -183,9 +243,7 @@
 							},
 							"userProperties": [],
 							"typeProperties": {
-								"fieldList": [
-									"childItems"
-								],
+								"fieldList": [],
 								"storeSettings": {
 									"type": "AzureBlobFSReadSettings",
 									"recursive": true,
@@ -217,13 +275,13 @@
 				}
 			},
 			{
-				"name": "ForEachMonth",
+				"name": "ForEach Month",
 				"type": "ForEach",
 				"state": "Inactive",
 				"onInactiveMarkAs": "Succeeded",
 				"dependsOn": [
 					{
-						"activity": "ForEachYear",
+						"activity": "ForEach Year1",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -238,7 +296,7 @@
 					"isSequential": true,
 					"activities": [
 						{
-							"name": "Get MetadataMonth",
+							"name": "Get Metadata Month",
 							"type": "GetMetadata",
 							"dependsOn": [],
 							"policy": {
@@ -250,9 +308,7 @@
 							},
 							"userProperties": [],
 							"typeProperties": {
-								"fieldList": [
-									"childItems"
-								],
+								"fieldList": [],
 								"storeSettings": {
 									"type": "AzureBlobFSReadSettings",
 									"recursive": true,
@@ -267,13 +323,13 @@
 				}
 			},
 			{
-				"name": "ForEachDay",
+				"name": "ForEach Day",
 				"type": "ForEach",
 				"state": "Inactive",
 				"onInactiveMarkAs": "Succeeded",
 				"dependsOn": [
 					{
-						"activity": "ForEachMonth",
+						"activity": "ForEach Month",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -288,7 +344,7 @@
 					"isSequential": true,
 					"activities": [
 						{
-							"name": "Get MetadataDay",
+							"name": "Get Metadata Day",
 							"type": "GetMetadata",
 							"dependsOn": [],
 							"policy": {
@@ -300,9 +356,7 @@
 							},
 							"userProperties": [],
 							"typeProperties": {
-								"fieldList": [
-									"childItems"
-								],
+								"fieldList": [],
 								"storeSettings": {
 									"type": "AzureBlobFSReadSettings",
 									"recursive": true,
@@ -323,7 +377,7 @@
 				"onInactiveMarkAs": "Succeeded",
 				"dependsOn": [
 					{
-						"activity": "ForEachDay",
+						"activity": "ForEach Day",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -332,11 +386,42 @@
 				"userProperties": []
 			},
 			{
-				"name": "ForEach1",
+				"name": "Set variable1",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "ForEach Entities",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "var",
+					"value": {
+						"value": "@variables('appendVar')",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "ForEach Year",
 				"type": "ForEach",
 				"dependsOn": [
 					{
-						"activity": "ForEachEntities",
+						"activity": "Set variable1",
+						"dependencyConditions": [
+							"Succeeded",
+							"Failed"
+						]
+					},
+					{
+						"activity": "ForEach Entities",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -345,11 +430,75 @@
 				"userProperties": [],
 				"typeProperties": {
 					"items": {
-						"value": "@activity('Get MetadataEntities').output.childItems",
+						"value": "@variables('appendVar')",
 						"type": "Expression"
 					},
 					"isSequential": true,
 					"activities": [
+						{
+							"name": "Get Metadata Year",
+							"type": "GetMetadata",
+							"dependsOn": [
+								{
+									"activity": "Set variable2",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"dataset": {
+									"referenceName": "ds_adlsGen2",
+									"type": "DatasetReference",
+									"parameters": {
+										"folder": {
+											"value": "@item()",
+											"type": "Expression"
+										}
+									}
+								},
+								"fieldList": [
+									"childItems",
+									"itemName"
+								],
+								"storeSettings": {
+									"type": "AzureBlobFSReadSettings",
+									"recursive": true,
+									"enablePartitionDiscovery": false
+								},
+								"formatSettings": {
+									"type": "DelimitedTextReadSettings"
+								}
+							}
+						},
+						{
+							"name": "Append variable_copy1",
+							"type": "AppendVariable",
+							"dependsOn": [
+								{
+									"activity": "Get Metadata Year",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "appendVariable",
+								"value": {
+									"value": "@{variables('appendVar')[0]}/@{activity('Get Metadata Year').output.childItems[0].name}",
+									"type": "Expression"
+								}
+							}
+						},
 						{
 							"name": "Set variable2",
 							"type": "SetVariable",
@@ -360,9 +509,9 @@
 							},
 							"userProperties": [],
 							"typeProperties": {
-								"variableName": "varNew",
+								"variableName": "var",
 								"value": {
-									"value": "@item().name",
+									"value": "@item()",
 									"type": "Expression"
 								}
 							}
@@ -401,6 +550,9 @@
 			},
 			"varNew": {
 				"type": "String"
+			},
+			"appendVariable": {
+				"type": "Array"
 			}
 		},
 		"annotations": []
