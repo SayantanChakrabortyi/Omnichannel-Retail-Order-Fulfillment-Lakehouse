@@ -1,0 +1,16 @@
+{
+	"name": "SayantanSubhajitADF",
+	"properties": {
+		"trustModeClaimForMi": {
+			"value": "Disabled",
+			"editable": true,
+			"isExplicitlySet": false
+		}
+	},
+	"location": "centralindia",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "033f8e32-7eba-4396-9b0b-7b6c663406eb",
+		"tenantId": "efc02bfd-2d32-4f53-94e2-581484ac2eda"
+	}
+}
