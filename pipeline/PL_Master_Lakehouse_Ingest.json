@@ -1,0 +1,1330 @@
+{
+	"name": "PL_Master_Lakehouse_Ingest",
+	"properties": {
+		"description": "Metadata-driven ingestion: control table -> ForEach active source -> Landing, then Databricks Bronze -> Silver -> Gold. Failures are logged to dbo.pipeline_audit_log and re-raised.",
+		"activities": [
+			{
+				"name": "Set_Effective_Run_Date",
+				"type": "SetVariable",
+				"dependsOn": [],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "effective_run_date",
+					"value": {
+						"value": "@if(empty(pipeline().parameters.run_date), formatDateTime(utcnow(), 'yyyy-MM-dd'), pipeline().parameters.run_date)",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "Lookup_ActiveSources",
+				"type": "Lookup",
+				"dependsOn": [
+					{
+						"activity": "Set_Effective_Run_Date",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": "SELECT source_name, source_type, load_type, source_object, file_format, watermark_column, last_watermark_value, target_folder FROM dbo.control_table WHERE is_active = 1",
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "ForEach_Active_Source",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "Lookup_ActiveSources",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('Lookup_ActiveSources').output.value",
+						"type": "Expression"
+					},
+					"isSequential": false,
+					"batchCount": 3,
+					"activities": [
+						{
+							"name": "If_Source_Is_SQL",
+							"type": "IfCondition",
+							"dependsOn": [],
+							"userProperties": [],
+							"typeProperties": {
+								"expression": {
+									"value": "@equals(toUpper(item().source_type), 'SQL')",
+									"type": "Expression"
+								},
+								"ifFalseActivities": [
+									{
+										"name": "Copy_Files_To_Landing",
+										"type": "Copy",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 2,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "BinarySource",
+												"storeSettings": {
+													"type": "AzureBlobFSReadSettings",
+													"recursive": true,
+													"wildcardFolderPath": {
+														"value": "@concat(item().source_object, '/', formatDateTime(variables('effective_run_date'), 'yyyy/MM/dd'))",
+														"type": "Expression"
+													},
+													"wildcardFileName": "*",
+													"deleteFilesAfterCompletion": false
+												},
+												"formatSettings": {
+													"type": "BinaryReadSettings"
+												}
+											},
+											"sink": {
+												"type": "BinarySink",
+												"storeSettings": {
+													"type": "AzureBlobFSWriteSettings",
+													"copyBehavior": "PreserveHierarchy"
+												}
+											},
+											"enableStaging": false
+										}
+									},
+									{
+										"name": "Log_Success_File_Source",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Copy_Files_To_Landing",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "Copy_Files_To_Landing",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "SUCCESS",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"rows_copied": {
+													"value": {
+														"value": "@activity('Copy_Files_To_Landing').output.filesWritten",
+														"type": "Expression"
+													},
+													"type": "Int64"
+												}
+											}
+										}
+									},
+									{
+										"name": "Log_Failure_File_Copy",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Copy_Files_To_Landing",
+												"dependencyConditions": [
+													"Failed"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "Copy_Files_To_Landing",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "FAILED",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"error_message": {
+													"value": {
+														"value": "@activity('Copy_Files_To_Landing').error.message",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										}
+									},
+									{
+										"name": "Fail_File_Copy",
+										"type": "Fail",
+										"dependsOn": [
+											{
+												"activity": "Log_Failure_File_Copy",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"userProperties": [],
+										"typeProperties": {
+											"message": {
+												"value": "@concat('File copy failed for ', item().source_name)",
+												"type": "Expression"
+											},
+											"errorCode": "ADF_SRC_FILE"
+										}
+									}
+								],
+								"ifTrueActivities": [
+									{
+										"name": "Lookup_NewWatermark",
+										"type": "Lookup",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "@concat('SELECT ISNULL(CONVERT(varchar(23), MAX(', item().watermark_column, '), 121), ''', item().last_watermark_value, ''') AS NewWatermark FROM ', item().source_object)",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"firstRowOnly": true
+										}
+									},
+									{
+										"name": "Copy_SQL_To_Landing",
+										"type": "Copy",
+										"dependsOn": [
+											{
+												"activity": "Lookup_NewWatermark",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 2,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "@concat('SELECT * FROM ', item().source_object, ' WHERE ', item().watermark_column, ' > ''', item().last_watermark_value, ''' AND ', item().watermark_column, ' <= ''', activity('Lookup_NewWatermark').output.firstRow.NewWatermark, '''')",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"sink": {
+												"type": "ParquetSink",
+												"storeSettings": {
+													"type": "AzureBlobFSWriteSettings"
+												},
+												"formatSettings": {
+													"type": "ParquetWriteSettings"
+												}
+											},
+											"enableStaging": false
+										}
+									},
+									{
+										"name": "SP_Update_Watermark",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Copy_SQL_To_Landing",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_update_watermark]",
+											"storedProcedureParameters": {
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"new_watermark": {
+													"value": {
+														"value": "@activity('Lookup_NewWatermark').output.firstRow.NewWatermark",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										}
+									},
+									{
+										"name": "Log_Success_SQL_Source",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "SP_Update_Watermark",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "Copy_SQL_To_Landing",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "SUCCESS",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"rows_copied": {
+													"value": {
+														"value": "@activity('Copy_SQL_To_Landing').output.rowsCopied",
+														"type": "Expression"
+													},
+													"type": "Int64"
+												}
+											}
+										}
+									},
+									{
+										"name": "Log_Failure_Lookup_Watermark",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Lookup_NewWatermark",
+												"dependencyConditions": [
+													"Failed"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "Lookup_NewWatermark",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "FAILED",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"error_message": {
+													"value": {
+														"value": "@activity('Lookup_NewWatermark').error.message",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										}
+									},
+									{
+										"name": "Log_Failure_SQL_Copy",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Copy_SQL_To_Landing",
+												"dependencyConditions": [
+													"Failed"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "Copy_SQL_To_Landing",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "FAILED",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"error_message": {
+													"value": {
+														"value": "@activity('Copy_SQL_To_Landing').error.message",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										}
+									},
+									{
+										"name": "Log_Failure_Watermark_Update",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "SP_Update_Watermark",
+												"dependencyConditions": [
+													"Failed"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.01:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+											"storedProcedureParameters": {
+												"run_id": {
+													"value": {
+														"value": "@pipeline().RunId",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"pipeline_name": {
+													"value": {
+														"value": "@pipeline().Pipeline",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"activity_name": {
+													"value": "SP_Update_Watermark",
+													"type": "String"
+												},
+												"batch_date": {
+													"value": {
+														"value": "@variables('effective_run_date')",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"status": {
+													"value": "FAILED",
+													"type": "String"
+												},
+												"source_name": {
+													"value": {
+														"value": "@item().source_name",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"error_message": {
+													"value": {
+														"value": "@activity('SP_Update_Watermark').error.message",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										}
+									},
+									{
+										"name": "Fail_SQL_Lookup",
+										"type": "Fail",
+										"dependsOn": [
+											{
+												"activity": "Log_Failure_Lookup_Watermark",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"userProperties": [],
+										"typeProperties": {
+											"message": {
+												"value": "@concat('Watermark lookup failed for ', item().source_name)",
+												"type": "Expression"
+											},
+											"errorCode": "ADF_SRC_LOOKUP"
+										}
+									},
+									{
+										"name": "Fail_SQL_Copy",
+										"type": "Fail",
+										"dependsOn": [
+											{
+												"activity": "Log_Failure_SQL_Copy",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"userProperties": [],
+										"typeProperties": {
+											"message": {
+												"value": "@concat('Incremental copy failed for ', item().source_name)",
+												"type": "Expression"
+											},
+											"errorCode": "ADF_SRC_COPY"
+										}
+									},
+									{
+										"name": "Fail_SQL_WM",
+										"type": "Fail",
+										"dependsOn": [
+											{
+												"activity": "Log_Failure_Watermark_Update",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"userProperties": [],
+										"typeProperties": {
+											"message": {
+												"value": "@concat('Watermark update failed for ', item().source_name)",
+												"type": "Expression"
+											},
+											"errorCode": "ADF_SRC_WM"
+										}
+									}
+								]
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "NB_Bronze_Ingest",
+				"type": "DatabricksNotebook",
+				"dependsOn": [
+					{
+						"activity": "ForEach_Active_Source",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.04:00:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 60,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"notebookPath": {
+						"value": "@concat(pipeline().parameters.notebook_base_path, '/01_bronze_ingest')",
+						"type": "Expression"
+					},
+					"baseParameters": {
+						"batch_id": {
+							"value": "@pipeline().RunId",
+							"type": "Expression"
+						},
+						"run_date": {
+							"value": "@variables('effective_run_date')",
+							"type": "Expression"
+						},
+						"landing_container": {
+							"value": "@pipeline().parameters.landing_container",
+							"type": "Expression"
+						}
+					}
+				}
+			},
+			{
+				"name": "NB_Silver_Transform",
+				"type": "DatabricksNotebook",
+				"dependsOn": [
+					{
+						"activity": "NB_Bronze_Ingest",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.04:00:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 60,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"notebookPath": {
+						"value": "@concat(pipeline().parameters.notebook_base_path, '/02_silver_transform')",
+						"type": "Expression"
+					},
+					"baseParameters": {
+						"batch_id": {
+							"value": "@pipeline().RunId",
+							"type": "Expression"
+						},
+						"run_date": {
+							"value": "@variables('effective_run_date')",
+							"type": "Expression"
+						},
+						"landing_container": {
+							"value": "@pipeline().parameters.landing_container",
+							"type": "Expression"
+						}
+					}
+				}
+			},
+			{
+				"name": "NB_Gold_Model",
+				"type": "DatabricksNotebook",
+				"dependsOn": [
+					{
+						"activity": "NB_Silver_Transform",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.04:00:00",
+					"retry": 1,
+					"retryIntervalInSeconds": 60,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"notebookPath": {
+						"value": "@concat(pipeline().parameters.notebook_base_path, '/03_gold_model')",
+						"type": "Expression"
+					},
+					"baseParameters": {
+						"batch_id": {
+							"value": "@pipeline().RunId",
+							"type": "Expression"
+						},
+						"run_date": {
+							"value": "@variables('effective_run_date')",
+							"type": "Expression"
+						},
+						"landing_container": {
+							"value": "@pipeline().parameters.landing_container",
+							"type": "Expression"
+						}
+					}
+				}
+			},
+			{
+				"name": "Log_Pipeline_Success",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "NB_Gold_Model",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "PL_Master_Lakehouse_Ingest",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "PIPELINE_SUCCESS",
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Log_Failure_Lookup_ActiveSources",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "Lookup_ActiveSources",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "Lookup_ActiveSources",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "FAILED",
+							"type": "String"
+						},
+						"error_message": {
+							"value": {
+								"value": "@activity('Lookup_ActiveSources').error.message",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Fail_Lookup_ActiveSources",
+				"type": "Fail",
+				"dependsOn": [
+					{
+						"activity": "Log_Failure_Lookup_ActiveSources",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"message": {
+						"value": "Control table lookup failed - see pipeline_audit_log",
+						"type": "Expression"
+					},
+					"errorCode": "ADF_CONTROL"
+				}
+			},
+			{
+				"name": "Log_Failure_ForEach_Active_Source",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "ForEach_Active_Source",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "ForEach_Active_Source",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "FAILED",
+							"type": "String"
+						},
+						"error_message": {
+							"value": {
+								"value": "@activity('ForEach_Active_Source').error.message",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Fail_ForEach_Active_Source",
+				"type": "Fail",
+				"dependsOn": [
+					{
+						"activity": "Log_Failure_ForEach_Active_Source",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"message": {
+						"value": "Source ingestion failed - see pipeline_audit_log",
+						"type": "Expression"
+					},
+					"errorCode": "ADF_INGEST"
+				}
+			},
+			{
+				"name": "Log_Failure_NB_Bronze_Ingest",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "NB_Bronze_Ingest",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "NB_Bronze_Ingest",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "FAILED",
+							"type": "String"
+						},
+						"error_message": {
+							"value": {
+								"value": "@activity('NB_Bronze_Ingest').error.message",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Fail_NB_Bronze_Ingest",
+				"type": "Fail",
+				"dependsOn": [
+					{
+						"activity": "Log_Failure_NB_Bronze_Ingest",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"message": {
+						"value": "Bronze notebook failed - see pipeline_audit_log",
+						"type": "Expression"
+					},
+					"errorCode": "ADF_BRONZE"
+				}
+			},
+			{
+				"name": "Log_Failure_NB_Silver_Transform",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "NB_Silver_Transform",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "NB_Silver_Transform",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "FAILED",
+							"type": "String"
+						},
+						"error_message": {
+							"value": {
+								"value": "@activity('NB_Silver_Transform').error.message",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Fail_NB_Silver_Transform",
+				"type": "Fail",
+				"dependsOn": [
+					{
+						"activity": "Log_Failure_NB_Silver_Transform",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"message": {
+						"value": "Silver notebook failed - see pipeline_audit_log",
+						"type": "Expression"
+					},
+					"errorCode": "ADF_SILVER"
+				}
+			},
+			{
+				"name": "Log_Failure_NB_Gold_Model",
+				"type": "SqlServerStoredProcedure",
+				"dependsOn": [
+					{
+						"activity": "NB_Gold_Model",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.01:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"storedProcedureName": "[dbo].[usp_log_pipeline_event]",
+					"storedProcedureParameters": {
+						"run_id": {
+							"value": {
+								"value": "@pipeline().RunId",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"pipeline_name": {
+							"value": {
+								"value": "@pipeline().Pipeline",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"activity_name": {
+							"value": "NB_Gold_Model",
+							"type": "String"
+						},
+						"batch_date": {
+							"value": {
+								"value": "@variables('effective_run_date')",
+								"type": "Expression"
+							},
+							"type": "String"
+						},
+						"status": {
+							"value": "FAILED",
+							"type": "String"
+						},
+						"error_message": {
+							"value": {
+								"value": "@activity('NB_Gold_Model').error.message",
+								"type": "Expression"
+							},
+							"type": "String"
+						}
+					}
+				}
+			},
+			{
+				"name": "Fail_NB_Gold_Model",
+				"type": "Fail",
+				"dependsOn": [
+					{
+						"activity": "Log_Failure_NB_Gold_Model",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"message": {
+						"value": "Gold notebook failed - see pipeline_audit_log",
+						"type": "Expression"
+					},
+					"errorCode": "ADF_GOLD"
+				}
+			}
+		],
+		"parameters": {
+			"run_date": {
+				"type": "string"
+			},
+			"landing_container": {
+				"type": "string",
+				"defaultValue": "landing"
+			},
+			"source_container": {
+				"type": "string",
+				"defaultValue": "source-sim"
+			},
+			"notebook_base_path": {
+				"type": "string",
+				"defaultValue": "/Repos/lakehouse/notebooks"
+			}
+		},
+		"variables": {
+			"effective_run_date": {
+				"type": "String"
+			}
+		},
+		"annotations": [
+			"medallion",
+			"metadata-driven"
+		]
+	}
+}
