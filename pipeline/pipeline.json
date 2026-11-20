@@ -871,7 +871,7 @@
 			"appendVar": {
 				"type": "Array"
 			},
-			"entities": {
+			"varEntities": {
 				"type": "String"
 			},
 			"varNew": {
@@ -879,6 +879,14 @@
 			},
 			"appendVariable": {
 				"type": "Array"
+			},
+			"entities": {
+				"type": "Array",
+				"defaultValue": [
+					"customers_crm",
+					"inventory_snap",
+					"orders_txn"
+				]
 			}
 		},
 		"annotations": []
