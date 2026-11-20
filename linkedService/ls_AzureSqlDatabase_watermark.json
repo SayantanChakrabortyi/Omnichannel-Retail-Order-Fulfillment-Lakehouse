@@ -1,0 +1,24 @@
+{
+	"name": "ls_AzureSqlDatabase_watermark",
+	"properties": {
+		"annotations": [],
+		"type": "AzureSqlDatabase",
+		"typeProperties": {
+			"server": "omnichannelretailtamalinkedin.database.windows.net",
+			"database": "watermark",
+			"encrypt": "mandatory",
+			"trustServerCertificate": false,
+			"authenticationType": "SQL",
+			"userName": "OmnichannelRetailTamaMoulikLinkedin",
+			"password": {
+				"type": "AzureKeyVaultSecret",
+				"store": {
+					"referenceName": "AzureKeyVault_sql",
+					"type": "LinkedServiceReference"
+				},
+				"secretName": "SaySubWatermarkKey",
+				"secretVersion": "c13ec8da00c0488580bed6f97ced7688"
+			}
+		}
+	}
+}
