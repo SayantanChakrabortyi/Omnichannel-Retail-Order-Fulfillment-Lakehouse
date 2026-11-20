@@ -1,0 +1,16 @@
+{
+	"name": "ds_AzureSqlTable_watermark",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_AzureSqlDatabase_watermark",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [],
+		"typeProperties": {
+			"schema": "dbo",
+			"table": "watermark_table"
+		}
+	}
+}
